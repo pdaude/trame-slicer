@@ -18,6 +18,7 @@ from slicer import (
     vtkSlicerTerminologiesModuleLogic,
     vtkSlicerVolumesLogic,
 )
+from slicer_core.vtkSlicerSequencesModuleLogic import vtkSlicerSequencesLogic
 from vtkmodules.vtkCommonCore import vtkCollection, vtkOutputWindow
 
 
@@ -99,6 +100,7 @@ class SlicerApp:
             vtkSlicerTerminologiesModuleLogic(), share_sub_folder="terminologies"
         )
         self.segmentations_logic = self.register_module_logic(vtkSlicerSegmentationsModuleLogic())
+        self.sequences_logic = self.register_module_logic(vtkSlicerSequencesLogic(), logic_name="Sequences")
         self.subject_hierarchy_logic = self.register_module_logic(vtkSlicerSubjectHierarchyModuleLogic())
         self.data_logic = self.register_module_logic(vtkSlicerDataModuleLogic())
 
