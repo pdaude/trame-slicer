@@ -9,7 +9,7 @@ from .flex_container import FlexContainer
 
 @dataclass
 class MprInteractionButtonState:
-    is_interactive: bool = False
+    is_interactive: bool = True
 
 
 class MprInteractionButton(FlexContainer):

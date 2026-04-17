@@ -10,7 +10,7 @@ from .control_button import ControlButton
 @dataclass
 class LayoutButtonState:
     layout_ids: list[str] = field(default_factory=list)
-    current_layout_id: str = "Axial Primary"
+    current_layout_id: str = "Quad View"
 
 
 class LayoutButton(VMenu):
