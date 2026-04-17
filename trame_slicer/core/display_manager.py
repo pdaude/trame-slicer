@@ -30,16 +30,22 @@ class DisplayManager:
         self.show_volume_in_slice_background(volume_node, view_group)
         self.show_volume_in_slice_foreground(None, view_group)
 
-        vr_display = (
-            self._vr.create_display_node(volume_node, vr_preset)
-            if not self._vr.has_vr_display_node(volume_node)
-            else self._vr.get_vr_display_node(volume_node)
-        )
+        if self._supports_volume_rendering(volume_node):
+            vr_display = (
+                self._vr.create_display_node(volume_node, vr_preset)
+                if not self._vr.has_vr_display_node(volume_node)
+                else self._vr.get_vr_display_node(volume_node)
+            )
 
-        if vr_preset:
-            self._vr.apply_preset(vr_display, vr_preset)
+            if vr_preset:
+                self._vr.apply_preset(vr_display, vr_preset)
 
-        vr_display.SetVisibility(True)
+            vr_display.SetVisibility(True)
+        else:
+            vr_display = self._vr.get_vr_display_node(volume_node)
+            if vr_display:
+                vr_display.SetVisibility(False)
+
         self.set_node_visible_in_group(volume_node, view_group)
 
         if do_reset_views:
@@ -91,3 +97,13 @@ class DisplayManager:
                 continue
 
             display.SetViewNodeIDs(view_node_ids)
+
+    @staticmethod
+    def _supports_volume_rendering(volume_node: vtkMRMLVolumeNode) -> bool:
+        image_data = volume_node.GetImageData() if volume_node else None
+        point_data = image_data.GetPointData() if image_data else None
+        scalars = point_data.GetScalars() if point_data else None
+        if scalars is None:
+            return False
+        component_count = int(scalars.GetNumberOfComponents())
+        return 1 <= component_count <= 4

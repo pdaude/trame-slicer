@@ -79,6 +79,9 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
             return
 
         display_node = self._volume_rendering.get_vr_display_node(self._volume_node)
+        if display_node is None:
+            self.data.volume_crop_active = False
+            return
         roi_node = display_node.GetROINode()
 
         roi_node = self._volume_rendering.set_cropping_enabled(self._volume_node, roi_node, True)
@@ -96,6 +99,11 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self._auto_window_level()
 
     def _init_vr_shift_slider(self):
+        if self._volume_rendering.get_vr_display_node(self._volume_node) is None:
+            self.data.vr_shift_slider.min_value = 0
+            self.data.vr_shift_slider.max_value = 0
+            self.data.vr_shift_slider.value = 0
+            return
         self.data.vr_shift_slider.min_value, self.data.vr_shift_slider.max_value = (
             self._volume_rendering.get_preset_vr_shift_range(self.data.preset_3d_name)
         )
@@ -112,6 +120,9 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
             return
 
         vr_node = self._volume_rendering.get_vr_display_node(self._volume_node)
+        if vr_node is None:
+            self._init_vr_shift_slider()
+            return
         self._volume_rendering.apply_preset(vr_node, preset_name)
         self._init_vr_shift_slider()
 
@@ -141,6 +152,8 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
 
     def _set_vr_shift_value(self, vr_shift_value: float):
         if not self._volume_node:
+            return
+        if self._volume_rendering.get_vr_display_node(self._volume_node) is None:
             return
 
         self._volume_rendering.set_absolute_vr_shift_from_preset(
