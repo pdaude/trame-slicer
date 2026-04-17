@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from slicer import vtkMRMLSequenceBrowserNode, vtkMRMLSequenceNode, vtkMRMLVolumeNode
 from trame_server import Server
 from undo_stack import Signal
-from vtkmodules.vtkCommonDataModel import vtkImageData
 from vtkmodules.vtkCommonMath import vtkMatrix4x4
 from vtkmodules.vtkImagingCore import vtkImageExtractComponents
 
@@ -16,6 +17,7 @@ from ..ui import (
     LoadVolumeUI,
 )
 from .base_logic import BaseLogic
+
 
 class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
     volume_loaded = Signal(vtkMRMLVolumeNode)
@@ -93,18 +95,14 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
 
     def _is_sequence_candidate(self, file_path: str) -> bool:
         suffixes = [suffix.lower() for suffix in Path(file_path).suffixes]
-        return any(suffix in {".nrrd", ".nhdr"} for suffix in suffixes)
+        return any(suffix in {".seq", ".nrrd", ".nhdr"} for suffix in suffixes)
 
     def _try_load_sequence(self, sequence_file: str) -> bool:
         try:
             sequence_node = self._slicer_app.sequences_logic.AddSequence(sequence_file)
-        except Exception as exc:
+        except Exception:
             return False
 
-        print(
-            "[AstroLIT sequence] AddSequence result:",
-            type(sequence_node).__name__ if sequence_node is not None else None,
-        )
         if not isinstance(sequence_node, vtkMRMLSequenceNode):
             return False
 
@@ -113,10 +111,6 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
             return False
 
         browser_node = self._ensure_sequence_browser(sequence_node)
-        print(
-            "[AstroLIT sequence] browser node:",
-            type(browser_node).__name__ if browser_node is not None else None,
-        )
         if browser_node is None:
             return False
 
@@ -124,16 +118,8 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
         if proxy_volume is None and sequence_node.GetNumberOfDataNodes() > 0:
             proxy_volume = browser_node.AddProxyNode(sequence_node.GetNthDataNode(0), sequence_node, True)
 
-        print(
-            "[AstroLIT sequence] proxy volume:",
-            type(proxy_volume).__name__ if proxy_volume is not None else None,
-        )
         if not isinstance(proxy_volume, vtkMRMLVolumeNode):
             return False
-
-        image_data = proxy_volume.GetImageData()
-        scalars = image_data.GetPointData().GetScalars() if image_data and image_data.GetPointData() else None
-        component_count = scalars.GetNumberOfComponents() if scalars is not None else 0
 
         return self._activate_sequence_browser(browser_node, sequence_node, proxy_volume)
 
@@ -147,9 +133,6 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
         scalars = point_data.GetScalars() if point_data else None
         component_count = int(scalars.GetNumberOfComponents()) if scalars is not None else 0
 
-        print(
-            f"[AstroLIT sequence] fallback source volume: class={type(source_volume).__name__} components={component_count}"
-        )
         if component_count <= 1:
             return False
 
@@ -169,23 +152,16 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
             extractor.SetComponents(frame_index)
             extractor.Update()
 
-            frame_image = vtkImageData()
-            frame_image.DeepCopy(extractor.GetOutput())
-
             frame_node = self.scene.AddNewNodeByClass(
                 "vtkMRMLScalarVolumeNode",
                 f"{source_volume.GetName()} frame {frame_index + 1}",
             )
             frame_node.SetIJKToRASMatrix(ijk_to_ras)
-            frame_node.SetAndObserveImageData(frame_image)
+            frame_node.SetAndObserveImageData(extractor.GetOutput())
             frame_node.CreateDefaultDisplayNodes()
             sequence_node.SetDataNodeAtValue(frame_node, str(frame_index))
 
         browser_node = self._ensure_sequence_browser(sequence_node)
-        print(
-            "[AstroLIT sequence] fallback browser node:",
-            type(browser_node).__name__ if browser_node is not None else None,
-        )
         if browser_node is None:
             self.scene.RemoveNode(sequence_node)
             return False
@@ -194,10 +170,6 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
         if proxy_volume is None and sequence_node.GetNumberOfDataNodes() > 0:
             proxy_volume = browser_node.AddProxyNode(sequence_node.GetNthDataNode(0), sequence_node, True)
 
-        print(
-            "[AstroLIT sequence] fallback proxy volume:",
-            type(proxy_volume).__name__ if proxy_volume is not None else None,
-        )
         if not isinstance(proxy_volume, vtkMRMLVolumeNode):
             self.scene.RemoveNode(sequence_node)
             return False
@@ -210,6 +182,7 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
         browser_node: vtkMRMLSequenceBrowserNode,
         sequence_node: vtkMRMLSequenceNode,
         proxy_volume: vtkMRMLVolumeNode,
+        do_reset_views: bool = True,
     ) -> bool:
         browser_node.SetSelectedItemNumber(0)
         browser_node.SetPlaybackActive(False)
@@ -221,7 +194,7 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
         self._active_proxy_volume = proxy_volume
         self.sequence_loaded(browser_node, sequence_node, proxy_volume)
 
-        self._slicer_app.display_manager.show_volume(proxy_volume, do_reset_views=True)
+        self._slicer_app.display_manager.show_volume(proxy_volume, do_reset_views=do_reset_views)
         self.volume_loaded(proxy_volume)
         return True
 

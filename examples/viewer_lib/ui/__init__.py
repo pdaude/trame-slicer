@@ -1,4 +1,5 @@
 from .control_button import ControlButton
+from .dataset_manager_ui import DatasetListItemState, DatasetManagerState, DatasetManagerUI
 from .dynamic_select import DynamicSelect, DynamicSelectState
 from .enum_to_title import enum_to_title
 from .flex_container import FlexContainer
@@ -50,6 +51,9 @@ __all__ = [
     "BrushParametersState",
     "BrushParametersUI",
     "ControlButton",
+    "DatasetListItemState",
+    "DatasetManagerState",
+    "DatasetManagerUI",
     "DynamicSelect",
     "DynamicSelectState",
     "FlexContainer",

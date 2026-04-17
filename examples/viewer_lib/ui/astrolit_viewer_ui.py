@@ -1,9 +1,12 @@
+from trame.widgets import client
 from trame.widgets.vuetify3 import Template, VSpacer
 from trame_server import Server
+from undo_stack import Signal
 
 from trame_slicer.core import LayoutManager
 
 from .control_button import ControlButton
+from .dataset_manager_ui import DatasetManagerUI
 from .flex_container import FlexContainer
 from .layout_button import LayoutButton
 from .load_volume_ui import LoadVolumeUI
@@ -20,10 +23,19 @@ from .volume_property_ui import VolumePropertyUI
 
 
 class AstroLITViewerUI:
+    observatory_context_requested = Signal(str)
+
     def __init__(self, server: Server, layout_manager: LayoutManager):
         self.tool_registry = {}
         with ViewerLayout(server) as self.layout:
             self.layout.title.set_text("Observatory")
+            client.ClientTriggers(
+                mounted=(
+                    "trigger('"
+                    f"{self.server.controller.trigger_name(self.observatory_context_requested.async_emit)}"
+                    "', [window.location.search])"
+                )
+            )
             with self.layout.appbar, Template(v_slot_prepend=True), FlexContainer(row=True, align="center", classes="ga-2"):
                 self.load_volume_items_buttons = LoadVolumeUI()
 
@@ -34,12 +46,18 @@ class AstroLITViewerUI:
             with self.layout.drawer:
                 self._register_tool_ui(SegmentEditorUI)
                 self._register_tool_ui(VolumePropertyUI)
+                self._register_tool_ui(DatasetManagerUI)
 
             with self.layout.toolbar, FlexContainer(fill_height=True):
                 self._create_tool_button(
                     icon="mdi-tune-variant",
                     name="Volume Properties",
                     tool_ui_type=VolumePropertyUI,
+                )
+                self._create_tool_button(
+                    icon="mdi-view-list",
+                    name="Datasets",
+                    tool_ui_type=DatasetManagerUI,
                 )
                 self.layout_button = LayoutButton()
                 self.markups_button = MarkupsButton()
@@ -64,6 +82,10 @@ class AstroLITViewerUI:
     @property
     def name(self):
         return self.layout.typed_state.name
+
+    @property
+    def server(self) -> Server:
+        return self.layout.server
 
     def _is_tool_active(self, tool_ui_type: type):
         return f"{self.name.active_tool} === '{tool_ui_type.__name__}'"

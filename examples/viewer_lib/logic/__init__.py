@@ -1,4 +1,6 @@
+from .astrolit_load_volume_logic import AstroLITLoadVolumeLogic
 from .base_logic import BaseLogic
+from .dataset_manager_logic import DatasetManagerLogic
 from .dynamic_select_logic import AbstractDynamicSelectLogic, IDynamicSelectItem
 from .load_volume_logic import LoadVolumeLogic
 from .markups_button_logic import MarkupsButtonLogic
@@ -23,7 +25,9 @@ from .volume_property_logic import VolumePropertyLogic
 
 __all__ = [
     "AbstractDynamicSelectLogic",
+    "AstroLITLoadVolumeLogic",
     "BaseLogic",
+    "DatasetManagerLogic",
     "EraseEffectLogic",
     "IDynamicSelectItem",
     "IslandsEffectLogic",
