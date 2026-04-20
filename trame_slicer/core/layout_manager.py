@@ -152,9 +152,9 @@ class LayoutManager:
             return
 
         layout_map = {
-            "Red": "Axial Only",
-            "Green": "Coronal Only",
-            "Yellow": "Sagittal Only",
+            "Red": "Axial Primary",
+            "Green": "Coronal Primary",
+            "Yellow": "Sagittal Primary",
         }
         target_layout_id = layout_map.get(view_id)
         if target_layout_id is None:
@@ -188,7 +188,27 @@ class LayoutManager:
                     axial_view,
                     Layout(
                         LayoutDirection.Vertical,
-                        [threed_view, coronal_view, sagittal_view],
+                        [coronal_view, sagittal_view],
+                    ),
+                ],
+            ),
+            "Sagittal Primary": Layout(
+                LayoutDirection.Horizontal,
+                [
+                    coronal_view,
+                    Layout(
+                        LayoutDirection.Vertical,
+                        [axial_view, sagittal_view],
+                    ),
+                ],
+            ),
+            "Coronal Primary": Layout(
+                LayoutDirection.Horizontal,
+                [
+                    sagittal_view,
+                    Layout(
+                        LayoutDirection.Vertical,
+                        [axial_view,coronal_view],
                     ),
                 ],
             ),
