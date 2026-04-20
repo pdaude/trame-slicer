@@ -27,7 +27,11 @@ class AstroLITViewerLogic(BaseLogic[ViewerLayoutState]):
     def __init__(self, server: Server, slicer_app: SlicerApp):
         super().__init__(server, slicer_app, ViewerLayoutState)
 
-        register_rca_factories(self._slicer_app.view_manager, self._server)
+        register_rca_factories(
+            self._slicer_app.view_manager,
+            self._server,
+            on_slice_double_click=self._on_slice_double_click,
+        )
 
         self._segment_editor_logic = SegmentEditorLogic(server, slicer_app)
         self._volume_properties_logic = VolumePropertyLogic(server, slicer_app)
@@ -72,3 +76,7 @@ class AstroLITViewerLogic(BaseLogic[ViewerLayoutState]):
             return
         self._last_observatory_search = normalized_search
         self._load_files_logic.load_from_observatory_query(normalized_search)
+
+    def _on_slice_double_click(self, view_id: str) -> None:
+        if hasattr(self, '_layout_button_logic'):
+            self._layout_button_logic.layout_manager.toggle_maximized_view(view_id)

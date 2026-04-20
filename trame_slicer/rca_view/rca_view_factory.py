@@ -51,6 +51,7 @@ def register_rca_factories(
     blur_fps: float = 10.0,
     interactive_quality: int = 50,
     rca_event_throttle_s: str | float | None = None,
+    on_slice_double_click: Callable[[str], None] | None = None,
 ) -> None:
     """
     Helper function to register all RCA factories to a view manager.
@@ -71,6 +72,7 @@ def register_rca_factories(
                 interactive_quality=interactive_quality,
                 populate_view_ui_f=populate_view_ui_f,
                 rca_event_throttle_s=rca_event_throttle_s,
+                on_double_click=on_slice_double_click if f_type is RemoteSliceViewFactory else None,
             )
         )
 
@@ -149,6 +151,7 @@ class RemoteViewFactory(IViewFactory):
         interactive_quality: int | None = None,
         rca_encoder: RcaEncoder | str | None = None,
         rca_event_throttle_s: str | float | None = None,
+        on_double_click: Callable[[str], None] | None = None,
     ):
         """
         :param server: Trame server.
@@ -175,6 +178,7 @@ class RemoteViewFactory(IViewFactory):
         self._rca_encoder = rca_encoder
         self._populate_view_ui_f = populate_view_ui_f
         self._rca_event_throttle_s = rca_event_throttle_s if rca_event_throttle_s is not None else 0.01
+        self._on_double_click = on_double_click
 
     def _get_slicer_view(self, view: RcaView) -> AbstractView:
         return view.slicer_view
@@ -249,13 +253,18 @@ class RemoteViewFactory(IViewFactory):
         # As views are not yet displayed, configure the views in blur FPS until first hover
         set_blur_fps()
 
-        with Div(
-            style=(
+        container_kwargs = {
+            "style": (
                 "{position: 'relative', width: '100%', height: '100%', overflow: 'hidden', cursor: `${"
                 + f"{active_view_cursor}"
                 + "}`}",
             )
-        ):
+        }
+        if self._on_double_click is not None:
+            trigger_name = self._server.controller.trigger_name(self._on_double_click)
+            container_kwargs["dblclick"] = f"trigger('{trigger_name}', ['{view_id}']);"
+
+        with Div(**container_kwargs):
             RemoteControlledArea(
                 name=view_id,
                 display="image",

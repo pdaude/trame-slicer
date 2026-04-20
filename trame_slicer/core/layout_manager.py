@@ -44,6 +44,8 @@ class LayoutManager:
         self._view_manager = view_manager
         self._virtual_node = virtual_node or VirtualNode(server)
         self._current_layout: str | None = None
+        self._previous_layout_before_maximize: str | None = None
+        self._maximized_layout_id: str | None = None
         self._scene_node = scene.AddNewNodeByClass("vtkMRMLScriptedModuleNode", "layout_node")
         self._is_virtual_node_initialized = is_virtual_node_initialized
 
@@ -70,6 +72,10 @@ class LayoutManager:
         self.registered_layouts_changed.emit()
 
     def set_layout(self, layout_id: str) -> None:
+        if layout_id != self._maximized_layout_id:
+            self._maximized_layout_id = None
+            if layout_id != self._previous_layout_before_maximize:
+                self._previous_layout_before_maximize = None
         if layout_id == self._current_layout:
             return
 
@@ -81,7 +87,6 @@ class LayoutManager:
         self._create_views_if_needed(self.get_layout(layout_id, Layout.empty_layout()))
 
     def _refresh_layout(self):
-        # Don't refresh layout when the current layout is None or when the virtual node is not yet bound to a layout.
         if not self._is_virtual_node_initialized or self._current_layout is None:
             return
 
@@ -140,6 +145,31 @@ class LayoutManager:
         with self.registered_layouts_changed.emit_once():
             for layout_id, layout in layout_dict.items():
                 self.register_layout(layout_id, layout, lazy_initialization)
+
+    def toggle_maximized_view(self, view_id: str) -> None:
+        current_layout_id = self.layout_id
+        if current_layout_id is None:
+            return
+
+        layout_map = {
+            "Red": "Axial Only",
+            "Green": "Coronal Only",
+            "Yellow": "Sagittal Only",
+        }
+        target_layout_id = layout_map.get(view_id)
+        if target_layout_id is None:
+            return
+
+        if self._maximized_layout_id == target_layout_id and self._previous_layout_before_maximize:
+            previous_layout = self._previous_layout_before_maximize
+            self._previous_layout_before_maximize = None
+            self._maximized_layout_id = None
+            self.set_layout(previous_layout)
+            return
+
+        self._previous_layout_before_maximize = current_layout_id
+        self._maximized_layout_id = target_layout_id
+        self.set_layout(target_layout_id)
 
     @classmethod
     def default_grid_configuration(cls) -> dict[str, Layout]:
