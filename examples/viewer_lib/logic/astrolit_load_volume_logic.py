@@ -79,8 +79,20 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         super()._load_volume_files(files)
 
     def _show_largest_volume(self, volumes):
+        if not volumes:
+            return
+
         self._register_volume_datasets(volumes)
-        super()._show_largest_volume(volumes)
+        self._clear_active_sequence_context()
+
+        def bounds_volume(v):
+            b = [0] * 6
+            v.GetImageData().GetBounds(b)
+            return (b[1] - b[0]) * (b[3] - b[2]) * (b[5] - b[4])
+
+        volumes = sorted(volumes, key=bounds_volume)
+        volume_node = volumes[-1]
+        self._show_volume_in_slices(volume_node, do_reset_views=True)
         self._apply_dataset_stack(do_reset_views=False)
 
     def _activate_sequence_browser(
@@ -90,16 +102,20 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         proxy_volume: vtkMRMLVolumeNode,
         do_reset_views: bool = True,
     ) -> bool:
-        activated = super()._activate_sequence_browser(
-            browser_node,
-            sequence_node,
-            proxy_volume,
-            do_reset_views=do_reset_views,
-        )
-        if activated:
-            self._register_sequence_dataset(browser_node, sequence_node, proxy_volume)
-            self._apply_dataset_stack(do_reset_views=False)
-        return activated
+        browser_node.SetSelectedItemNumber(0)
+        browser_node.SetPlaybackActive(False)
+        browser_node.SetPlaybackLooped(True)
+        self._slicer_app.sequences_logic.UpdateProxyNodesFromSequences(browser_node)
+
+        self._active_sequence_browser = browser_node
+        self._active_sequence_node = sequence_node
+        self._active_proxy_volume = proxy_volume
+        self.sequence_loaded(browser_node, sequence_node, proxy_volume)
+
+        self._register_sequence_dataset(browser_node, sequence_node, proxy_volume)
+        self._show_volume_in_slices(proxy_volume, do_reset_views=do_reset_views)
+        self._apply_dataset_stack(do_reset_views=False)
+        return True
 
     def toggle_dataset_visibility(self, dataset_id: str) -> None:
         dataset = self._managed_datasets.get(dataset_id)
@@ -230,6 +246,23 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         self._show_largest_volume(created_scalar_volumes)
         return True
 
+    def _show_volume_in_slices(self, volume_node: vtkMRMLVolumeNode, do_reset_views: bool) -> None:
+        if volume_node is None:
+            return
+
+        self._hide_volume_rendering(volume_node)
+        self._slicer_app.display_manager.show_volume_in_slice_background(volume_node, view_group=None)
+        self._slicer_app.display_manager.show_volume_in_slice_foreground(None, view_group=None)
+        self._slicer_app.display_manager.set_node_visible_in_group(volume_node, view_group=None)
+        if do_reset_views:
+            self._slicer_app.display_manager.reset_views(view_group=None)
+        self.volume_loaded(volume_node)
+
+    def _hide_volume_rendering(self, volume_node: vtkMRMLVolumeNode) -> None:
+        vr_display = self._slicer_app.volume_rendering.get_vr_display_node(volume_node)
+        if vr_display is not None:
+            vr_display.SetVisibility(False)
+
     def _move_dataset(self, dataset_id: str, delta: int) -> None:
         items = list(self._managed_datasets.items())
         current_index = next((index for index, (key, _value) in enumerate(items) if key == dataset_id), None)
@@ -254,6 +287,7 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
                     continue
                 if dataset.is_visible:
                     node.SetDisplayVisibility(True)
+                    self._hide_volume_rendering(node)
                     self._slicer_app.display_manager.set_node_visible_in_group(node, view_group=None)
                 else:
                     self._slicer_app.display_manager.hide_volume(node, view_group=None)
@@ -527,5 +561,4 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         node = self.scene.GetNodeByID(node_id)
         if not isinstance(node, vtkMRMLVolumeNode):
             return
-        self._slicer_app.display_manager.show_volume(node, do_reset_views=do_reset_views)
-        self.volume_loaded(node)
+        self._show_volume_in_slices(node, do_reset_views=do_reset_views)

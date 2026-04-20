@@ -27,17 +27,34 @@ class VolumePropertyState:
     presets_2d: list[Preset] = field(default_factory=list)
     preset_2d_name: str | None = None
     volume_crop_active: bool = False
+    volume_rendering_visible: bool = False
 
 
 class VolumePropertyUI(VCard):
     auto_window_level_clicked = Signal()
     vr_crop_button_clicked = Signal()
+    vr_visibility_clicked = Signal()
 
     def __init__(self, **kwargs):
         super().__init__(variant="flat", **kwargs)
         self._typed_state = TypedState(self.state, VolumePropertyState)
 
         with self, VCardText(), FlexContainer():
+            with FlexContainer(row=True, align="center", classes="ga-2"):
+                Text("3D Rendering", subtitle=True)
+                ControlButton(
+                    icon=(
+                        "{{ " + f"{self._typed_state.name.volume_rendering_visible} ? 'mdi-cube' : 'mdi-cube-off-outline'" + " }}",
+                    ),
+                    name=(
+                        "{{ "
+                        + f"{self._typed_state.name.volume_rendering_visible} ? 'Hide 3D rendering' : 'Show 3D rendering'"
+                        + " }}"
+                    ),
+                    active=(self._typed_state.name.volume_rendering_visible,),
+                    click=self.vr_visibility_clicked,
+                )
+
             Text("3D Preset", subtitle=True)
             with VSelect(
                 items=(self._typed_state.name.presets_3d,),
@@ -91,5 +108,6 @@ class VolumePropertyUI(VCard):
                     name="Crop volume rendering",
                     active=(self._typed_state.name.volume_crop_active,),
                     click=self.vr_crop_button_clicked,
+                    disabled=(f"!{self._typed_state.name.volume_rendering_visible}",),
                     **kwargs,
                 )

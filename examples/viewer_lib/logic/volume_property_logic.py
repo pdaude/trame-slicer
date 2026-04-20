@@ -30,6 +30,7 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
     def set_ui(self, ui: VolumePropertyUI):
         ui.auto_window_level_clicked.connect(self._auto_window_level)
         ui.vr_crop_button_clicked.connect(self._toggle_vr_crop)
+        ui.vr_visibility_clicked.connect(self._toggle_volume_rendering_visibility)
 
     @property
     def _volume_rendering(self):
@@ -63,6 +64,7 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
 
         self._init_preset()
         self._init_window_level_slider()
+        self._set_volume_rendering_visible(False)
 
     def _init_preset(self):
         self._set_preset_3d(self.data.preset_3d_name)
@@ -161,3 +163,30 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
             self.data.preset_3d_name,
             vr_shift_value,
         )
+
+    def _toggle_volume_rendering_visibility(self):
+        self._set_volume_rendering_visible(not bool(self.data.volume_rendering_visible))
+
+    def _set_volume_rendering_visible(self, is_visible: bool):
+        if not self._volume_node:
+            self.data.volume_rendering_visible = False
+            self.data.volume_crop_active = False
+            self._init_vr_shift_slider()
+            return
+
+        vr_node = self._volume_rendering.get_vr_display_node(self._volume_node)
+        if is_visible:
+            if vr_node is None:
+                vr_node = self._volume_rendering.create_display_node(self._volume_node, self.data.preset_3d_name)
+            else:
+                self._volume_rendering.apply_preset(vr_node, self.data.preset_3d_name)
+            if vr_node is not None:
+                vr_node.SetVisibility(True)
+            self.data.volume_rendering_visible = True
+        else:
+            if vr_node is not None:
+                vr_node.SetVisibility(False)
+            self.data.volume_rendering_visible = False
+            self.data.volume_crop_active = False
+
+        self._init_vr_shift_slider()
