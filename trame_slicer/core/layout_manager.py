@@ -195,20 +195,20 @@ class LayoutManager:
             "Sagittal Primary": Layout(
                 LayoutDirection.Horizontal,
                 [
-                    coronal_view,
+                    sagittal_view,
                     Layout(
                         LayoutDirection.Vertical,
-                        [axial_view, sagittal_view],
+                        [coronal_view,axial_view],
                     ),
                 ],
             ),
             "Coronal Primary": Layout(
                 LayoutDirection.Horizontal,
                 [
-                    sagittal_view,
+                    coronal_view,
                     Layout(
                         LayoutDirection.Vertical,
-                        [axial_view,coronal_view],
+                        [sagittal_view,axial_view],
                     ),
                 ],
             ),
