@@ -607,11 +607,11 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         return dict(zip(header_record.dtype.names, header_record))
 
     def _frame_count_from_shape(self, volume_shape: tuple[int, ...], header_count: int) -> int:
-        if header_count > 0:
-            return int(header_count)
-        squeezed_shape = [dim for dim in volume_shape if dim != 1]
+        squeezed_shape = [int(dim) for dim in volume_shape if int(dim) != 1]
         if len(squeezed_shape) >= 4:
             return int(squeezed_shape[-1])
+        if header_count > 0:
+            return int(header_count)
         return 1
 
     def _matrix_size_string(
@@ -640,12 +640,21 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         return str(fallback_index)
 
     def _series_frame_count(self, series: dict[str, Any]) -> int:
+        explicit_frame_count = series.get("frame_count")
+        if explicit_frame_count is not None:
+            try:
+                return max(int(explicit_frame_count), 1)
+            except (TypeError, ValueError):
+                pass
+
+        volume = np.asarray(series.get("volume"))
+        squeezed_shape = [int(dim) for dim in volume.shape if int(dim) != 1]
+        if len(squeezed_shape) >= 4:
+            return int(squeezed_shape[-1])
+
         headers = series.get("header") or []
         if headers:
             return len(headers)
-        volume = np.asarray(series.get("volume"))
-        if volume.ndim >= 4:
-            return int(volume.shape[-1])
         return 1
 
     def _create_sequence_from_h5_series(
