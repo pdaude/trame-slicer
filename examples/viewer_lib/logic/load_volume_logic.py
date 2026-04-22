@@ -28,15 +28,27 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
         self._active_sequence_browser: vtkMRMLSequenceBrowserNode | None = None
         self._active_sequence_node: vtkMRMLSequenceNode | None = None
         self._active_proxy_volume: vtkMRMLVolumeNode | None = None
+        self._ui: LoadVolumeUI | None = None
 
     def set_ui(self, ui: LoadVolumeUI):
+        self._ui = ui
         ui.on_load_volume.connect(self._on_load_volume)
+        ui.on_load_local_path.connect(self._on_load_local_path)
 
     def _on_load_volume(self, files: list[dict], is_loading_state_name: str) -> None:
         try:
             self._load_volume_files(files)
         finally:
             self.state[is_loading_state_name] = False
+            self._hide_loading_dialog()
+
+    def _on_load_local_path(self, path_value: str, is_loading_state_name: str) -> None:
+        try:
+            self._load_local_path(path_value)
+        finally:
+            self.state[is_loading_state_name] = False
+            self.state[self.name.local_path_value] = ""
+            self._hide_loading_dialog()
 
     def _load_volume_files(self, files: list[dict]) -> None:
         if not files:
@@ -51,6 +63,32 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
                 self._on_load_scene(loaded_files[0])
             else:
                 self._on_load_volume_files(loaded_files)
+
+    def _load_local_path(self, path_value: str) -> None:
+        resolved_path = Path((path_value or "").strip()).expanduser()
+        if not resolved_path.exists():
+            print(f"[Load Volume] local path not found: {resolved_path}")
+            self._show_path_error_dialog(resolved_path)
+            return
+
+        self._clear_active_sequence_context()
+        self._slicer_app.scene.Clear()
+
+        if resolved_path.suffix.lower() == ".mrb":
+            self._on_load_scene(str(resolved_path))
+            return
+
+        self._on_load_volume_files([str(resolved_path)])
+
+
+    def _hide_loading_dialog(self) -> None:
+        self.state[self.name.loading_dialog_visible] = False
+        self.state[self.name.loading_dialog_title] = 'Loading dataset'
+        self.state[self.name.loading_dialog_message] = 'Reading data...'
+
+    def _show_path_error_dialog(self, path_value: Path) -> None:
+        self.state[self.name.path_error_dialog_message] = f'The path does not exist: {path_value}'
+        self.state[self.name.path_error_dialog_visible] = True
 
     def _on_load_scene(self, scene_file):
         self._slicer_app.io_manager.load_scene(scene_file)

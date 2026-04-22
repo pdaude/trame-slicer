@@ -4,6 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -17,6 +18,7 @@ from undo_stack import Signal
 from vtkmodules.vtkCommonMath import vtkMatrix4x4
 
 from trame_slicer.core import SlicerApp
+from trame_slicer.utils import write_client_files_to_dir
 
 from .load_volume_logic import LoadVolumeLogic
 
@@ -28,6 +30,23 @@ class ObservatoryLoadContext:
     reconstruction_path: Path
     load_mode: str
     selected_images: list[str]
+
+
+@dataclass
+class H5SeriesSummary:
+    label: str
+    key_img: str
+    frame_count: int
+    matrix_size: str
+    first_header: dict[str, Any] | None = None
+
+
+@dataclass
+class PendingH5Selection:
+    h5_path: Path
+    display_name: str
+    series_rows: list[H5SeriesSummary]
+    temp_dir: TemporaryDirectory[str] | None = None
 
 
 @dataclass
@@ -47,6 +66,14 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         super().__init__(server, slicer_app)
         self._managed_datasets: dict[str, ManagedDataset] = {}
         self._dataset_counter = 0
+        self._pending_h5_selection: PendingH5Selection | None = None
+
+    def set_ui(self, ui):
+        super().set_ui(ui)
+        self.state[self.name.show_local_path_button] = True
+        ui.on_h5_load_selected.connect(self._on_h5_load_selected)
+        ui.on_h5_load_all.connect(self._on_h5_load_all)
+        ui.on_h5_dialog_cancel.connect(self._on_h5_dialog_cancel)
 
     def load_from_observatory_query(self, search: str) -> bool:
         context = self._resolve_observatory_context(search)
@@ -69,14 +96,57 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             print(f"[AstroLIT viewer] unsupported reconstruction type: {context.reconstruction_path}")
             return False
 
-        self._reset_managed_datasets()
-        self._clear_active_sequence_context()
-        self._slicer_app.scene.Clear()
+        self._cleanup_pending_h5_selection()
+        self._prepare_new_scene()
         return self._load_reconstruction_h5_context(context)
 
     def _load_volume_files(self, files: list[dict]) -> None:
-        self._reset_managed_datasets()
-        super()._load_volume_files(files)
+        self._cleanup_pending_h5_selection()
+        if not files:
+            return
+
+        tmp_dir: TemporaryDirectory[str] | None = TemporaryDirectory()
+        try:
+            loaded_files = write_client_files_to_dir(files, tmp_dir.name)
+            if len(loaded_files) == 1:
+                loaded_path = Path(loaded_files[0])
+                if loaded_path.suffix.lower() == ".mrb":
+                    self._prepare_new_scene()
+                    self._on_load_scene(loaded_files[0])
+                    return
+                if loaded_path.suffix.lower() == ".h5":
+                    print(f"[AstroLIT viewer] scanning uploaded h5: {loaded_path}")
+                    if self._present_h5_selection_dialog(loaded_path, loaded_path.name, temp_dir=tmp_dir):
+                        tmp_dir = None
+                        return
+                    print(f"[AstroLIT viewer] failed to scan uploaded h5: {loaded_path}")
+                    return
+
+            self._prepare_new_scene()
+            self._on_load_volume_files(loaded_files)
+        finally:
+            if tmp_dir is not None:
+                tmp_dir.cleanup()
+
+    def _load_local_path(self, path_value: str) -> None:
+        self._cleanup_pending_h5_selection()
+        resolved_path = Path((path_value or "").strip()).expanduser()
+        if not resolved_path.exists():
+            print(f"[AstroLIT viewer] local path not found: {resolved_path}")
+            return
+
+        if resolved_path.suffix.lower() == ".h5":
+            print(f"[AstroLIT viewer] scanning local h5: {resolved_path}")
+            if not self._present_h5_selection_dialog(resolved_path, resolved_path.name):
+                print(f"[AstroLIT viewer] failed to scan local h5: {resolved_path}")
+            return
+
+        self._prepare_new_scene()
+        if resolved_path.suffix.lower() == ".mrb":
+            self._on_load_scene(str(resolved_path))
+            return
+
+        self._on_load_volume_files([str(resolved_path)])
 
     def _show_largest_volume(self, volumes):
         if not volumes:
@@ -197,13 +267,148 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             return Path(configured)
         return Path(__file__).resolve().parents[4] / "AstroLIT" / "data"
 
+    def _prepare_new_scene(self) -> None:
+        self._reset_managed_datasets()
+        self._clear_active_sequence_context()
+        self._slicer_app.scene.Clear()
+
+    def _load_uploaded_h5_file(self, h5_path: Path) -> bool:
+        return self._load_reconstruction_h5_file(
+            reconstruction_path=h5_path,
+            reconstruction_name=h5_path.name,
+            load_mode="all",
+            selected_images=[],
+        )
+
     def _load_reconstruction_h5_context(self, context: ObservatoryLoadContext) -> bool:
-        selected_labels = set(context.selected_images)
-        only_selected = context.load_mode == "selected" and bool(selected_labels)
+        return self._load_reconstruction_h5_file(
+            reconstruction_path=context.reconstruction_path,
+            reconstruction_name=context.reconstruction_name,
+            load_mode=context.load_mode,
+            selected_images=context.selected_images,
+        )
+
+    def _present_h5_selection_dialog(
+        self,
+        h5_path: Path,
+        display_name: str,
+        temp_dir: TemporaryDirectory[str] | None = None,
+    ) -> bool:
+        series_rows = self._scan_reconstruction_series(h5_path)
+        if not series_rows:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+            return False
+
+        self._pending_h5_selection = PendingH5Selection(
+            h5_path=h5_path,
+            display_name=display_name,
+            series_rows=series_rows,
+            temp_dir=temp_dir,
+        )
+        self.state[self.name.h5_selection_dialog_title] = f"Select image series from {display_name}"
+        self.state[self.name.h5_selection_dialog_path] = h5_path.as_posix()
+        self.state[self.name.h5_series_rows] = [
+            {
+                "label": row.label,
+                "frame_count": str(row.frame_count),
+                "matrix_size": row.matrix_size,
+            }
+            for row in series_rows
+        ]
+        self.state[self.name.h5_selected_labels] = [row.label for row in series_rows]
+        self.state[self.name.h5_selection_dialog_visible] = True
+        return True
+
+    def _on_h5_load_selected(self, selected_labels: list[str]) -> None:
+        labels = [str(label) for label in (selected_labels or [])]
+        try:
+            if not labels:
+                print("[AstroLIT viewer] no H5 series selected")
+                return
+            self._finalize_pending_h5_selection(load_mode="selected", selected_labels=labels)
+        finally:
+            self._hide_loading_dialog()
+
+    def _on_h5_load_all(self) -> None:
+        try:
+            self._finalize_pending_h5_selection(load_mode="all", selected_labels=[])
+        finally:
+            self._hide_loading_dialog()
+
+    def _on_h5_dialog_cancel(self) -> None:
+        self._hide_loading_dialog()
+        self._cleanup_pending_h5_selection()
+
+    def _finalize_pending_h5_selection(self, load_mode: str, selected_labels: list[str]) -> None:
+        pending = self._pending_h5_selection
+        if pending is None:
+            return
+
+        self._hide_h5_selection_dialog()
+        self._prepare_new_scene()
+        try:
+            selected_set = set(selected_labels)
+            only_selected = load_mode == "selected" and bool(selected_set)
+            matching_series = self._read_reconstruction_series_from_scan(
+                pending.h5_path,
+                pending.series_rows,
+                selected_set if only_selected else None,
+            )
+            self._build_loaded_reconstruction_series(
+                pending.display_name,
+                pending.h5_path,
+                matching_series,
+                selected_set,
+                only_selected,
+            )
+        finally:
+            self._cleanup_pending_h5_selection()
+
+    def _hide_h5_selection_dialog(self) -> None:
+        self.state[self.name.h5_selection_dialog_visible] = False
+        self.state[self.name.h5_selection_dialog_title] = ""
+        self.state[self.name.h5_selection_dialog_path] = ""
+        self.state[self.name.h5_series_rows] = []
+        self.state[self.name.h5_selected_labels] = []
+
+    def _cleanup_pending_h5_selection(self) -> None:
+        pending = self._pending_h5_selection
+        self._pending_h5_selection = None
+        self._hide_h5_selection_dialog()
+        if pending is not None and pending.temp_dir is not None:
+            pending.temp_dir.cleanup()
+
+    def _load_reconstruction_h5_file(
+        self,
+        reconstruction_path: Path,
+        reconstruction_name: str,
+        load_mode: str,
+        selected_images: list[str],
+    ) -> bool:
+        selected_labels = set(selected_images)
+        only_selected = load_mode == "selected" and bool(selected_labels)
         matching_series = self._read_reconstruction_series(
-            context.reconstruction_path,
+            reconstruction_path,
             selected_labels if only_selected else None,
         )
+
+        return self._build_loaded_reconstruction_series(
+            reconstruction_name,
+            reconstruction_path,
+            matching_series,
+            selected_labels,
+            only_selected,
+        )
+
+    def _build_loaded_reconstruction_series(
+        self,
+        reconstruction_name: str,
+        reconstruction_path: Path,
+        matching_series: list[tuple[str, dict[str, Any]]],
+        selected_labels: set[str],
+        only_selected: bool,
+    ) -> bool:
 
         print(
             "[AstroLIT viewer] selected series labels:",
@@ -212,12 +417,12 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
         if only_selected and not matching_series:
             print(
-                f"[AstroLIT viewer] no matching image series for {context.reconstruction_name}: {sorted(selected_labels)}"
+                f"[AstroLIT viewer] no matching image series for {reconstruction_name}: {sorted(selected_labels)}"
             )
             return False
 
         if not matching_series:
-            print(f"[AstroLIT viewer] no reconstruction data loaded from {context.reconstruction_path}")
+            print(f"[AstroLIT viewer] no reconstruction data loaded from {reconstruction_path}")
             return False
 
         sequence_activated = False
@@ -225,12 +430,12 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         for label, series in matching_series:
             print(f"[AstroLIT viewer] building MRML nodes for series {label}")
             if self._series_frame_count(series) > 1 and not sequence_activated:
-                if self._create_sequence_from_h5_series(context.reconstruction_name, label, series):
+                if self._create_sequence_from_h5_series(reconstruction_name, label, series):
                     print(f"[AstroLIT viewer] activated sequence browser for series {label}")
                     sequence_activated = True
                     continue
 
-            volume_node = self._create_scalar_volume_from_h5_series(context.reconstruction_name, label, series)
+            volume_node = self._create_scalar_volume_from_h5_series(reconstruction_name, label, series)
             if volume_node is not None:
                 print(f"[AstroLIT viewer] created scalar volume for series {label}: {volume_node.GetName()}")
                 created_scalar_volumes.append(volume_node)
@@ -328,7 +533,50 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         h5_path: Path,
         selected_labels: set[str] | None,
     ) -> list[tuple[str, dict[str, Any]]]:
+        scan_rows = self._scan_reconstruction_series(h5_path)
+        print(
+            "[AstroLIT viewer] loading series from scan:",
+            [row.label for row in scan_rows if selected_labels is None or row.label in selected_labels],
+        )
+        return self._read_reconstruction_series_from_scan(h5_path, scan_rows, selected_labels)
+
+    def _read_reconstruction_series_from_scan(
+        self,
+        h5_path: Path,
+        scan_rows: list[H5SeriesSummary],
+        selected_labels: set[str] | None,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        row_by_label = {row.label: row for row in scan_rows}
+        ordered_rows = (
+            [row_by_label[label] for label in selected_labels if label in row_by_label]
+            if selected_labels is not None
+            else scan_rows
+        )
         matching_series: list[tuple[str, dict[str, Any]]] = []
+        with ismrmrd.File(h5_path, "r") as mrd:
+            for row in ordered_rows:
+                image_group = mrd[row.key_img].images
+                print(f"[AstroLIT viewer] reading H5 payload for series {row.label} ({row.key_img})")
+                image_data = np.array(image_group.data).T
+                if len(image_data.dtype) == 2:
+                    image_data = image_data["real"] + 1j * image_data["imag"]
+                print(
+                    f"[AstroLIT viewer] loaded series {row.label}: shape={image_data.shape} dtype={image_data.dtype}"
+                )
+                matching_series.append(
+                    (
+                        row.label,
+                        {
+                            "volume": image_data,
+                            "header": [row.first_header] if row.first_header else [],
+                            "frame_count": row.frame_count,
+                        },
+                    )
+                )
+        return matching_series
+
+    def _scan_reconstruction_series(self, h5_path: Path) -> list[H5SeriesSummary]:
+        series_rows: list[H5SeriesSummary] = []
         with ismrmrd.File(h5_path, "r") as mrd:
             image_keys = list(mrd.find_images())
             print(
@@ -336,23 +584,52 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             )
             for fallback_index, key_img in enumerate(image_keys):
                 image_group = mrd[key_img].images
-                headers = [
-                    dict(zip(image_group.headers[i].dtype.names, image_group.headers[i]))
-                    for i in range(image_group.headers.shape[0])
-                ]
-                label = self._series_label({"header": headers}, fallback_index)
-                if selected_labels is not None and label not in selected_labels:
-                    continue
-
-                print(f"[AstroLIT viewer] reading H5 payload for series {label} ({key_img})")
-                image_data = np.array(image_group.data).T
-                if len(image_data.dtype) == 2:
-                    image_data = image_data["real"] + 1j * image_data["imag"]
-                print(
-                    f"[AstroLIT viewer] loaded series {label}: shape={image_data.shape} dtype={image_data.dtype}"
+                header = self._first_series_header(image_group)
+                label = self._series_label({"header": [header] if header else []}, fallback_index)
+                raw_shape = tuple(int(value) for value in image_group.data.shape)
+                volume_shape = tuple(reversed(raw_shape))
+                frame_count = self._frame_count_from_shape(volume_shape, image_group.headers.shape[0])
+                series_rows.append(
+                    H5SeriesSummary(
+                        label=label,
+                        key_img=key_img,
+                        frame_count=frame_count,
+                        matrix_size=self._matrix_size_string(volume_shape, frame_count, header),
+                        first_header=header,
+                    )
                 )
-                matching_series.append((label, {"volume": image_data, "header": headers}))
-        return matching_series
+        return series_rows
+
+    def _first_series_header(self, image_group: Any) -> dict[str, Any] | None:
+        if image_group.headers.shape[0] <= 0:
+            return None
+        header_record = image_group.headers[0]
+        return dict(zip(header_record.dtype.names, header_record))
+
+    def _frame_count_from_shape(self, volume_shape: tuple[int, ...], header_count: int) -> int:
+        if header_count > 0:
+            return int(header_count)
+        squeezed_shape = [dim for dim in volume_shape if dim != 1]
+        if len(squeezed_shape) >= 4:
+            return int(squeezed_shape[-1])
+        return 1
+
+    def _matrix_size_string(
+        self,
+        volume_shape: tuple[int, ...],
+        frame_count: int,
+        header: dict[str, Any] | None,
+    ) -> str:
+        if header:
+            matrix_size = np.asarray(header.get("matrix_size", []), dtype=int).reshape(-1)
+            if matrix_size.size >= 3:
+                return " x ".join(str(int(value)) for value in matrix_size[:3])
+
+        squeezed_shape = [int(dim) for dim in volume_shape if int(dim) != 1]
+        if frame_count > 1 and len(squeezed_shape) >= 4 and squeezed_shape[-1] == frame_count:
+            squeezed_shape = squeezed_shape[:-1]
+        matrix_dims = squeezed_shape[:3] if squeezed_shape else [1]
+        return " x ".join(str(value) for value in matrix_dims)
 
     def _series_label(self, series: dict[str, Any], fallback_index: int) -> str:
         headers = series.get("header") or []
