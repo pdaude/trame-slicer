@@ -798,14 +798,17 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
         header = self._series_header(series)
         matrix = self._create_ijk_to_ras_matrix(header)
+        spacing = self._extract_spacing(header)
         for frame_index in range(frame_count):
             frame_node = self.scene.AddNewNodeByClass(
                 "vtkMRMLScalarVolumeNode",
                 f"{Path(reconstruction_name).stem} series {series_label} frame {frame_index + 1}",
             )
+            slicer.util.updateVolumeFromArray(frame_node, self._to_slicer_spatial_array(volume[..., frame_index]))
+            if spacing is not None:
+                frame_node.SetSpacing(*spacing)
             if matrix is not None:
                 frame_node.SetIJKToRASMatrix(matrix)
-            slicer.util.updateVolumeFromArray(frame_node, self._to_slicer_spatial_array(volume[..., frame_index]))
             frame_node.CreateDefaultDisplayNodes()
             sequence_node.SetDataNodeAtValue(frame_node, str(frame_index))
 
@@ -841,10 +844,14 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             "vtkMRMLScalarVolumeNode",
             f"{Path(reconstruction_name).stem} series {series_label}",
         )
-        matrix = self._create_ijk_to_ras_matrix(self._series_header(series))
+        header = self._series_header(series)
+        matrix = self._create_ijk_to_ras_matrix(header)
+        spacing = self._extract_spacing(header)
+        slicer.util.updateVolumeFromArray(node, self._to_slicer_spatial_array(volume))
+        if spacing is not None:
+            node.SetSpacing(*spacing)
         if matrix is not None:
             node.SetIJKToRASMatrix(matrix)
-        slicer.util.updateVolumeFromArray(node, self._to_slicer_spatial_array(volume))
         node.CreateDefaultDisplayNodes()
         return node
 
@@ -855,6 +862,17 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         return None
 
     def _create_ijk_to_ras_matrix(self, header: dict[str, Any] | None) -> vtkMatrix4x4 | None:
+        spacing = self._extract_spacing(header)
+        if spacing is None:
+            return None
+
+        matrix = vtkMatrix4x4()
+        matrix.Identity()
+        for axis, value in enumerate(spacing):
+            matrix.SetElement(axis, axis, float(value))
+        return matrix
+
+    def _extract_spacing(self, header: dict[str, Any] | None) -> tuple[float, float, float] | None:
         if not header:
             return None
 
@@ -863,13 +881,11 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         if field_of_view.size < 3 or matrix_size.size < 3:
             return None
 
-        matrix = vtkMatrix4x4()
-        matrix.Identity()
+        spacing: list[float] = []
         for axis in range(3):
             size = matrix_size[axis]
-            spacing = float(field_of_view[axis] / size) if size else 1.0
-            matrix.SetElement(axis, axis, spacing)
-        return matrix
+            spacing.append(float(field_of_view[axis] / size) if size else 1.0)
+        return tuple(spacing)
 
     def _to_slicer_spatial_array(self, volume: np.ndarray) -> np.ndarray:
         array = np.asarray(volume)
