@@ -86,8 +86,8 @@ class LoadVolumeLogic(BaseLogic[LoadVolumeState]):
         self.state[self.name.loading_dialog_title] = 'Loading dataset'
         self.state[self.name.loading_dialog_message] = 'Reading data...'
 
-    def _show_path_error_dialog(self, path_value: Path) -> None:
-        self.state[self.name.path_error_dialog_message] = f'The path does not exist: {path_value}'
+    def _show_path_error_dialog(self, path_value: Path, message: str | None = None) -> None:
+        self.state[self.name.path_error_dialog_message] = message or f'The path does not exist: {path_value}'
         self.state[self.name.path_error_dialog_visible] = True
 
     def _on_load_scene(self, scene_file):

@@ -88,6 +88,7 @@ class LoadVolumeUI(FlexContainer):
         selected_name = typed_state.name.h5_selected_labels
         rows_name = typed_state.name.h5_series_rows
         headers = """[
+            { title: 'File', key: 'source_name' },
             { title: 'Series', key: 'label' },
             { title: 'Frames', key: 'frame_count' },
             { title: 'Matrix Size', key: 'matrix_size' }
@@ -101,7 +102,7 @@ class LoadVolumeUI(FlexContainer):
                         v_model=(selected_name,),
                         headers=(headers,),
                         items=(rows_name,),
-                        item_value="label",
+                        item_value="item_value",
                         show_select=True,
                         return_object=False,
                         density="compact",

@@ -34,8 +34,11 @@ class ObservatoryLoadContext:
 
 @dataclass
 class H5SeriesSummary:
+    item_value: str
     label: str
     key_img: str
+    source_path: Path
+    source_name: str
     frame_count: int
     matrix_size: str
     first_header: dict[str, Any] | None = None
@@ -133,6 +136,17 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         resolved_path = Path((path_value or "").strip()).expanduser()
         if not resolved_path.exists():
             print(f"[AstroLIT viewer] local path not found: {resolved_path}")
+            self._show_path_error_dialog(resolved_path)
+            return
+
+        if resolved_path.is_dir():
+            print(f"[AstroLIT viewer] scanning local h5 directory: {resolved_path}")
+            if not self._present_h5_directory_selection_dialog(resolved_path):
+                print(f"[AstroLIT viewer] no readable h5 files in directory: {resolved_path}")
+                self._show_path_error_dialog(
+                    resolved_path,
+                    message='No .h5 files were found in the selected directory.',
+                )
             return
 
         if resolved_path.suffix.lower() == ".h5":
@@ -288,6 +302,24 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             selected_images=context.selected_images,
         )
 
+    def _present_h5_directory_selection_dialog(self, directory_path: Path) -> bool:
+        h5_files = sorted(path for path in directory_path.iterdir() if path.is_file() and path.suffix.lower() == '.h5')
+        if not h5_files:
+            return False
+
+        series_rows: list[H5SeriesSummary] = []
+        for h5_path in h5_files:
+            series_rows.extend(self._scan_reconstruction_series(h5_path))
+
+        if not series_rows:
+            return False
+
+        return self._present_h5_selection_rows(
+            series_rows=series_rows,
+            display_name=directory_path.name or directory_path.as_posix(),
+            display_path=directory_path.as_posix(),
+        )
+
     def _present_h5_selection_dialog(
         self,
         h5_path: Path,
@@ -300,23 +332,39 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
                 temp_dir.cleanup()
             return False
 
+        return self._present_h5_selection_rows(
+            series_rows=series_rows,
+            display_name=display_name,
+            display_path=h5_path.as_posix(),
+            temp_dir=temp_dir,
+        )
+
+    def _present_h5_selection_rows(
+        self,
+        series_rows: list[H5SeriesSummary],
+        display_name: str,
+        display_path: str,
+        temp_dir: TemporaryDirectory[str] | None = None,
+    ) -> bool:
         self._pending_h5_selection = PendingH5Selection(
-            h5_path=h5_path,
+            h5_path=Path(display_path),
             display_name=display_name,
             series_rows=series_rows,
             temp_dir=temp_dir,
         )
         self.state[self.name.h5_selection_dialog_title] = f"Select image series from {display_name}"
-        self.state[self.name.h5_selection_dialog_path] = h5_path.as_posix()
+        self.state[self.name.h5_selection_dialog_path] = display_path
         self.state[self.name.h5_series_rows] = [
             {
+                "item_value": row.item_value,
+                "source_name": row.source_name,
                 "label": row.label,
                 "frame_count": str(row.frame_count),
                 "matrix_size": row.matrix_size,
             }
             for row in series_rows
         ]
-        self.state[self.name.h5_selected_labels] = [row.label for row in series_rows]
+        self.state[self.name.h5_selected_labels] = [row.item_value for row in series_rows]
         self.state[self.name.h5_selection_dialog_visible] = True
         return True
 
@@ -351,9 +399,9 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             selected_set = set(selected_labels)
             only_selected = load_mode == "selected" and bool(selected_set)
             matching_series = self._read_reconstruction_series_from_scan(
-                pending.h5_path,
                 pending.series_rows,
                 selected_set if only_selected else None,
+                selected_mode='item_value',
             )
             self._build_loaded_reconstruction_series(
                 pending.display_name,
@@ -427,17 +475,19 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
         sequence_activated = False
         created_scalar_volumes: list[vtkMRMLVolumeNode] = []
-        for label, series in matching_series:
-            print(f"[AstroLIT viewer] building MRML nodes for series {label}")
+        for item_key, series in matching_series:
+            series_label = str(series.get('series_label') or item_key)
+            series_name = str(series.get('source_name') or reconstruction_name)
+            print(f"[AstroLIT viewer] building MRML nodes for series {series_label} from {series_name}")
             if self._series_frame_count(series) > 1 and not sequence_activated:
-                if self._create_sequence_from_h5_series(reconstruction_name, label, series):
-                    print(f"[AstroLIT viewer] activated sequence browser for series {label}")
+                if self._create_sequence_from_h5_series(series_name, series_label, series):
+                    print(f"[AstroLIT viewer] activated sequence browser for series {series_label}")
                     sequence_activated = True
                     continue
 
-            volume_node = self._create_scalar_volume_from_h5_series(reconstruction_name, label, series)
+            volume_node = self._create_scalar_volume_from_h5_series(series_name, series_label, series)
             if volume_node is not None:
-                print(f"[AstroLIT viewer] created scalar volume for series {label}: {volume_node.GetName()}")
+                print(f"[AstroLIT viewer] created scalar volume for series {series_label}: {volume_node.GetName()}")
                 created_scalar_volumes.append(volume_node)
                 self._register_volume_datasets([volume_node])
 
@@ -538,41 +588,49 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             "[AstroLIT viewer] loading series from scan:",
             [row.label for row in scan_rows if selected_labels is None or row.label in selected_labels],
         )
-        return self._read_reconstruction_series_from_scan(h5_path, scan_rows, selected_labels)
+        return self._read_reconstruction_series_from_scan(scan_rows, selected_labels, selected_mode='label')
 
     def _read_reconstruction_series_from_scan(
         self,
-        h5_path: Path,
         scan_rows: list[H5SeriesSummary],
         selected_labels: set[str] | None,
+        selected_mode: str = 'label',
     ) -> list[tuple[str, dict[str, Any]]]:
-        row_by_label = {row.label: row for row in scan_rows}
+        key_name = 'item_value' if selected_mode == 'item_value' else 'label'
+        row_by_key = {getattr(row, key_name): row for row in scan_rows}
         ordered_rows = (
-            [row_by_label[label] for label in selected_labels if label in row_by_label]
+            [row_by_key[label] for label in selected_labels if label in row_by_key]
             if selected_labels is not None
             else scan_rows
         )
         matching_series: list[tuple[str, dict[str, Any]]] = []
-        with ismrmrd.File(h5_path, "r") as mrd:
-            for row in ordered_rows:
-                image_group = mrd[row.key_img].images
-                print(f"[AstroLIT viewer] reading H5 payload for series {row.label} ({row.key_img})")
-                image_data = np.array(image_group.data).T
-                if len(image_data.dtype) == 2:
-                    image_data = image_data["real"] + 1j * image_data["imag"]
-                print(
-                    f"[AstroLIT viewer] loaded series {row.label}: shape={image_data.shape} dtype={image_data.dtype}"
-                )
-                matching_series.append(
-                    (
-                        row.label,
-                        {
-                            "volume": image_data,
-                            "header": [row.first_header] if row.first_header else [],
-                            "frame_count": row.frame_count,
-                        },
+        rows_by_source: dict[Path, list[H5SeriesSummary]] = {}
+        for row in ordered_rows:
+            rows_by_source.setdefault(row.source_path, []).append(row)
+
+        for source_path, source_rows in rows_by_source.items():
+            with ismrmrd.File(source_path, "r") as mrd:
+                for row in source_rows:
+                    image_group = mrd[row.key_img].images
+                    print(f"[AstroLIT viewer] reading H5 payload for series {row.label} ({row.key_img}) from {row.source_name}")
+                    image_data = np.array(image_group.data).T
+                    if len(image_data.dtype) == 2:
+                        image_data = image_data["real"] + 1j * image_data["imag"]
+                    print(
+                        f"[AstroLIT viewer] loaded series {row.label}: shape={image_data.shape} dtype={image_data.dtype}"
                     )
-                )
+                    matching_series.append(
+                        (
+                            row.item_value if selected_mode == 'item_value' else row.label,
+                            {
+                                "volume": image_data,
+                                "header": [row.first_header] if row.first_header else [],
+                                "frame_count": row.frame_count,
+                                "series_label": row.label,
+                                "source_name": row.source_name,
+                            },
+                        )
+                    )
         return matching_series
 
     def _scan_reconstruction_series(self, h5_path: Path) -> list[H5SeriesSummary]:
@@ -591,8 +649,11 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
                 frame_count = self._frame_count_from_shape(volume_shape, image_group.headers.shape[0])
                 series_rows.append(
                     H5SeriesSummary(
+                        item_value=f"{h5_path.as_posix()}::{key_img}",
                         label=label,
                         key_img=key_img,
+                        source_path=h5_path,
+                        source_name=h5_path.name,
                         frame_count=frame_count,
                         matrix_size=self._matrix_size_string(volume_shape, frame_count, header),
                         first_header=header,
