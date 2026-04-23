@@ -24,12 +24,17 @@ from .load_volume_logic import LoadVolumeLogic
 
 
 @dataclass
-class ObservatoryLoadContext:
-    subject_id: str
+class ObservatoryReconstructionSelection:
     reconstruction_name: str
     reconstruction_path: Path
-    load_mode: str
     selected_images: list[str]
+
+
+@dataclass
+class ObservatoryLoadContext:
+    subject_id: str
+    load_mode: str
+    selections: list[ObservatoryReconstructionSelection]
 
 
 @dataclass
@@ -88,16 +93,22 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             "[AstroLIT viewer] loading context:",
             {
                 "subject_id": context.subject_id,
-                "reconstruction": context.reconstruction_name,
-                "path": context.reconstruction_path.as_posix(),
                 "load_mode": context.load_mode,
-                "selected_images": context.selected_images,
+                "selections": [
+                    {
+                        "reconstruction": selection.reconstruction_name,
+                        "path": selection.reconstruction_path.as_posix(),
+                        "selected_images": selection.selected_images,
+                    }
+                    for selection in context.selections
+                ],
             },
         )
 
-        if context.reconstruction_path.suffix.lower() != ".h5":
-            print(f"[AstroLIT viewer] unsupported reconstruction type: {context.reconstruction_path}")
-            return False
+        for selection in context.selections:
+            if selection.reconstruction_path.suffix.lower() != ".h5":
+                print(f"[AstroLIT viewer] unsupported reconstruction type: {selection.reconstruction_path}")
+                return False
 
         self._cleanup_pending_h5_selection()
         self._prepare_new_scene()
@@ -235,36 +246,79 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
     def _resolve_observatory_context(self, search: str) -> ObservatoryLoadContext | None:
         query = parse_qs((search or "").lstrip("?"), keep_blank_values=False)
         subject_id = self._sanitize_single_query_value(query.get("subjectId"), r"[A-Za-z0-9_-]+")
-        reconstruction_name = self._sanitize_single_query_value(query.get("reconstruction"), r"[A-Za-z0-9._-]+")
         load_mode = self._sanitize_single_query_value(query.get("loadMode"), r"all|selected") or "all"
+        reconstruction_name = self._sanitize_single_query_value(query.get("reconstruction"), r"[A-Za-z0-9._-]+")
+        reconstructions_value = self._sanitize_single_query_value(query.get("reconstructions"), r"[A-Za-z0-9._|-]+")
         selected_images_value = self._sanitize_single_query_value(query.get("selectedImages"), r"[A-Za-z0-9._,-]+")
+        selected_series_value = self._sanitize_single_query_value(query.get("selectedSeries"), r"[A-Za-z0-9._,:;|-]+")
 
-        if not subject_id or not reconstruction_name:
+        if not subject_id:
             return None
 
-        selected_images = [item for item in (selected_images_value or "").split(",") if item]
         subject_index_path = self._resolve_astrolit_data_root() / "index" / "subjects" / f"{subject_id}.json"
         if not subject_index_path.is_file():
             print(f"[AstroLIT viewer] missing subject index: {subject_index_path}")
             return None
 
         subject_record = json.loads(subject_index_path.read_text())
-        reconstruction_path = None
-        for file_record in subject_record.get("reconstruction_files", []):
-            if file_record.get("file_name") == reconstruction_name:
-                reconstruction_path = Path(file_record["file_path"])
-                break
+        reconstruction_records = {
+            str(file_record.get("file_name")): Path(file_record["file_path"])
+            for file_record in subject_record.get("reconstruction_files", [])
+            if file_record.get("file_name") and file_record.get("file_path")
+        }
 
-        if reconstruction_path is None:
-            print(f"[AstroLIT viewer] reconstruction not found for subject {subject_id}: {reconstruction_name}")
+        selections: list[ObservatoryReconstructionSelection] = []
+        if selected_series_value:
+            for item in selected_series_value.split(";"):
+                if not item or ":" not in item:
+                    continue
+                reconstruction_key, labels_value = item.split(":", 1)
+                reconstruction_path = reconstruction_records.get(reconstruction_key)
+                if reconstruction_path is None:
+                    print(f"[AstroLIT viewer] reconstruction not found for subject {subject_id}: {reconstruction_key}")
+                    continue
+                selected_images = [value for value in labels_value.split(",") if value]
+                selections.append(
+                    ObservatoryReconstructionSelection(
+                        reconstruction_name=reconstruction_key,
+                        reconstruction_path=reconstruction_path,
+                        selected_images=selected_images,
+                    )
+                )
+        elif reconstructions_value:
+            for reconstruction_key in [value for value in reconstructions_value.split("|") if value]:
+                reconstruction_path = reconstruction_records.get(reconstruction_key)
+                if reconstruction_path is None:
+                    print(f"[AstroLIT viewer] reconstruction not found for subject {subject_id}: {reconstruction_key}")
+                    continue
+                selections.append(
+                    ObservatoryReconstructionSelection(
+                        reconstruction_name=reconstruction_key,
+                        reconstruction_path=reconstruction_path,
+                        selected_images=[],
+                    )
+                )
+        elif reconstruction_name:
+            reconstruction_path = reconstruction_records.get(reconstruction_name)
+            if reconstruction_path is None:
+                print(f"[AstroLIT viewer] reconstruction not found for subject {subject_id}: {reconstruction_name}")
+                return None
+            selected_images = [item for item in (selected_images_value or "").split(",") if item]
+            selections.append(
+                ObservatoryReconstructionSelection(
+                    reconstruction_name=reconstruction_name,
+                    reconstruction_path=reconstruction_path,
+                    selected_images=selected_images,
+                )
+            )
+
+        if not selections:
             return None
 
         return ObservatoryLoadContext(
             subject_id=subject_id,
-            reconstruction_name=reconstruction_name,
-            reconstruction_path=reconstruction_path,
             load_mode=load_mode,
-            selected_images=selected_images,
+            selections=selections,
         )
 
     def _sanitize_single_query_value(self, values: list[str] | None, pattern: str) -> str | None:
@@ -295,12 +349,18 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         )
 
     def _load_reconstruction_h5_context(self, context: ObservatoryLoadContext) -> bool:
-        return self._load_reconstruction_h5_file(
-            reconstruction_path=context.reconstruction_path,
-            reconstruction_name=context.reconstruction_name,
-            load_mode=context.load_mode,
-            selected_images=context.selected_images,
-        )
+        loaded_any = False
+        for selection in context.selections:
+            loaded_any = (
+                self._load_reconstruction_h5_file(
+                    reconstruction_path=selection.reconstruction_path,
+                    reconstruction_name=selection.reconstruction_name,
+                    load_mode=context.load_mode,
+                    selected_images=selection.selected_images,
+                )
+                or loaded_any
+            )
+        return loaded_any
 
     def _present_h5_directory_selection_dialog(self, directory_path: Path) -> bool:
         h5_files = sorted(path for path in directory_path.iterdir() if path.is_file() and path.suffix.lower() == '.h5')
