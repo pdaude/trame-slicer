@@ -866,10 +866,19 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         if spacing is None:
             return None
 
+        field_of_view = np.asarray(header.get("field_of_view", []), dtype=float).reshape(-1) if header else np.array([])
+        matrix_size = np.asarray(header.get("matrix_size", []), dtype=float).reshape(-1) if header else np.array([])
+        if field_of_view.size < 3 or matrix_size.size < 3:
+            return None
+
         matrix = vtkMatrix4x4()
         matrix.Identity()
         for axis, value in enumerate(spacing):
             matrix.SetElement(axis, axis, float(value))
+            # Center the voxel grid around the origin so datasets with different
+            # matrix sizes but identical physical coverage superimpose correctly.
+            origin = (-0.5 * float(field_of_view[axis])) + (0.5 * float(value))
+            matrix.SetElement(axis, 3, origin)
         return matrix
 
     def _extract_spacing(self, header: dict[str, Any] | None) -> tuple[float, float, float] | None:
