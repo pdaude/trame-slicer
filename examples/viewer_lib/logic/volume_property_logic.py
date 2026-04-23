@@ -60,6 +60,9 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
     def on_volume_changed(self, volume_node: vtkMRMLVolumeNode):
         self._volume_node = volume_node
 
+        if self._volume_node is None or self._volume_node.GetScene() is None:
+            return
+
         self._volume_node.AddObserver(vtkMRMLDisplayableNode.DisplayModifiedEvent, self._update_window_level_slider)
 
         self._init_preset()
@@ -70,14 +73,14 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self._set_preset_3d(self.data.preset_3d_name)
 
     def _auto_window_level(self):
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             return
 
         self.data.window_level_slider.value = list(VolumeWindowLevel.get_volume_auto_min_max_range(self._volume_node))
 
     def _toggle_vr_crop(self):
         was_active = self._typed_state.data.volume_crop_active
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             return
 
         display_node = self._volume_rendering.get_vr_display_node(self._volume_node)
@@ -92,7 +95,7 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self.data.volume_crop_active = is_active
 
     def _init_window_level_slider(self):
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             return
 
         min_value, max_value = VolumeWindowLevel.get_volume_scalar_range(self._volume_node)
@@ -112,13 +115,15 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self.data.vr_shift_slider.value = 0
 
     def _set_preset_2d(self, preset_name: str):
-        if self._volume_node is None or preset_name is None:
+        if not self._has_valid_volume_node() or preset_name is None:
             return
         volume_display_node = VolumeWindowLevel.get_volume_display_node(self._volume_node)
+        if volume_display_node is None:
+            return
         self._slicer_app.volumes_logic.ApplyVolumeDisplayPreset(volume_display_node, preset_name)
 
     def _set_preset_3d(self, preset_name: str):
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             return
 
         vr_node = self._volume_rendering.get_vr_display_node(self._volume_node)
@@ -129,14 +134,14 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self._init_vr_shift_slider()
 
     def _set_window_level_value(self, window_level: list[float]):
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             return
 
         min_value, max_value = window_level
         VolumeWindowLevel.set_volume_node_display_min_max_range(self._volume_node, min_value, max_value)
 
     def _update_window_level_slider(self, *_args, **_kwargs):
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             return
 
         min_value, max_value = VolumeWindowLevel.get_volume_display_range(self._volume_node)
@@ -153,7 +158,7 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self._typed_state.data.window_level_slider.value = [min_value, max_value]
 
     def _set_vr_shift_value(self, vr_shift_value: float):
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             return
         if self._volume_rendering.get_vr_display_node(self._volume_node) is None:
             return
@@ -168,7 +173,7 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self._set_volume_rendering_visible(not bool(self.data.volume_rendering_visible))
 
     def _set_volume_rendering_visible(self, is_visible: bool):
-        if not self._volume_node:
+        if not self._has_valid_volume_node():
             self.data.volume_rendering_visible = False
             self.data.volume_crop_active = False
             self._init_vr_shift_slider()
@@ -190,3 +195,10 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
             self.data.volume_crop_active = False
 
         self._init_vr_shift_slider()
+
+    def _has_valid_volume_node(self) -> bool:
+        return (
+            self._volume_node is not None
+            and self._volume_node.GetScene() is not None
+            and self._volume_node.GetImageData() is not None
+        )

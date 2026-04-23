@@ -27,6 +27,8 @@ class VolumeWindowLevel:
     @classmethod
     def set_volume_node_window_level(cls, volume_node: vtkMRMLVolumeNode, window: float, level: float) -> None:
         d_node = cls.get_volume_display_node(volume_node)
+        if d_node is None:
+            return
         d_node.SetAutoWindowLevel(0)
         d_node.SetWindowLevel(window, level)
 
@@ -39,6 +41,8 @@ class VolumeWindowLevel:
     @classmethod
     def get_volume_display_range(cls, volume_node: vtkMRMLVolumeNode) -> tuple[float, float]:
         d_node = cls.get_volume_display_node(volume_node)
+        if d_node is None:
+            return cls.get_volume_scalar_range(volume_node)
         return cls.window_level_to_min_max(d_node.GetWindow(), d_node.GetLevel())
 
     @classmethod
@@ -55,7 +59,9 @@ class VolumeWindowLevel:
         return window, level
 
     @classmethod
-    def get_volume_display_node(cls, volume_node: vtkMRMLVolumeNode) -> vtkMRMLVolumeDisplayNode:
+    def get_volume_display_node(cls, volume_node: vtkMRMLVolumeNode) -> vtkMRMLVolumeDisplayNode | None:
+        if volume_node is None or volume_node.GetScene() is None:
+            return None
         d_node = volume_node.GetDisplayNode()
         if d_node is None:
             volume_node.CreateDefaultDisplayNodes()
