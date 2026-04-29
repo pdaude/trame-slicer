@@ -20,6 +20,8 @@ class Preset:
 
 @dataclass
 class VolumePropertyState:
+    active_dataset_options: list[dict[str, str]] = field(default_factory=list)
+    active_dataset_id: str | None = None
     window_level_slider: RangeSliderState = field(default_factory=RangeSliderState)
     vr_shift_slider: SliderState = field(default_factory=SliderState)
     presets_3d: list[Preset] = field(default_factory=list)
@@ -40,6 +42,17 @@ class VolumePropertyUI(VCard):
         self._typed_state = TypedState(self.state, VolumePropertyState)
 
         with self, VCardText(), FlexContainer():
+            Text("Active Dataset", subtitle=True)
+            VSelect(
+                items=(self._typed_state.name.active_dataset_options,),
+                v_model=(self._typed_state.name.active_dataset_id,),
+                item_title="title",
+                item_value="value",
+                density="compact",
+                hide_details=True,
+                disabled=(f"{self._typed_state.name.active_dataset_options}.length === 0",),
+            )
+
             with FlexContainer(row=True, align="center", classes="ga-2"):
                 Text("3D Rendering", subtitle=True)
                 ControlButton(

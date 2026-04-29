@@ -12,20 +12,24 @@ from .base_logic import BaseLogic
 
 
 class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
-    def __init__(self, server: Server, slicer_app: SlicerApp):
+    def __init__(self, server: Server, slicer_app: SlicerApp, dataset_provider=None):
         super().__init__(server, slicer_app, VolumePropertyState)
         self._volume_node = None
+        self._dataset_provider = dataset_provider
         self._populate_presets_2d()
         self._populate_presets_3d()
 
         self._typed_state.bind_changes(
             {
+                self.name.active_dataset_id: self._on_active_dataset_changed,
                 self.name.vr_shift_slider.value: self._set_vr_shift_value,
                 self.name.window_level_slider.value: self._set_window_level_value,
                 self.name.preset_2d_name: self._set_preset_2d,
                 self.name.preset_3d_name: self._set_preset_3d,
             }
         )
+        if self._dataset_provider is not None:
+            self._dataset_provider.datasets_changed.connect(self._on_datasets_changed)
 
     def set_ui(self, ui: VolumePropertyUI):
         ui.auto_window_level_clicked.connect(self._auto_window_level)
@@ -58,6 +62,13 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self.data.presets_3d = self._get_presets_from_name_and_image(presets_icon_url)
 
     def on_volume_changed(self, volume_node: vtkMRMLVolumeNode):
+        if self._dataset_provider is not None:
+            active_dataset_id = self.data.active_dataset_id
+            if active_dataset_id:
+                dataset_volume = self._dataset_provider.get_dataset_volume_node(active_dataset_id)
+                if dataset_volume is not None:
+                    volume_node = dataset_volume
+
         self._volume_node = volume_node
 
         if self._volume_node is None or self._volume_node.GetScene() is None:
@@ -68,6 +79,42 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         self._init_preset()
         self._init_window_level_slider()
         self._set_volume_rendering_visible(False)
+
+    def _on_datasets_changed(self, datasets) -> None:
+        options = [
+            {
+                "title": dataset.name,
+                "value": dataset.dataset_id,
+            }
+            for dataset in datasets
+            if dataset.is_visible
+            and self._dataset_provider.get_dataset_volume_node(dataset.dataset_id) is not None
+        ]
+        self.data.active_dataset_options = options
+
+        current_id = self.data.active_dataset_id
+        valid_ids = {option["value"] for option in options}
+        if current_id not in valid_ids:
+            current_id = self._dataset_provider.get_highest_visible_dataset_id()
+            self.data.active_dataset_id = current_id
+
+        if current_id:
+            node = self._dataset_provider.get_dataset_volume_node(current_id)
+            if node is not None:
+                self.on_volume_changed(node)
+                return
+
+        self._volume_node = None
+        self.data.volume_rendering_visible = False
+        self.data.volume_crop_active = False
+
+    def _on_active_dataset_changed(self, dataset_id: str | None) -> None:
+        if self._dataset_provider is None or not dataset_id:
+            return
+        volume_node = self._dataset_provider.get_dataset_volume_node(dataset_id)
+        if volume_node is None:
+            return
+        self.on_volume_changed(volume_node)
 
     def _init_preset(self):
         self._set_preset_3d(self.data.preset_3d_name)

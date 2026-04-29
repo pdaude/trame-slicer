@@ -243,6 +243,25 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         self._emit_datasets_changed()
         self._apply_dataset_stack(do_reset_views=False)
 
+    def get_managed_datasets(self) -> list[ManagedDataset]:
+        return list(self._managed_datasets.values())
+
+    def get_dataset_volume_node(self, dataset_id: str) -> vtkMRMLVolumeNode | None:
+        dataset = self._managed_datasets.get(dataset_id)
+        if dataset is None:
+            return None
+        for node_id in dataset.visible_node_ids:
+            node = self.scene.GetNodeByID(node_id)
+            if isinstance(node, vtkMRMLVolumeNode):
+                return node
+        return None
+
+    def get_highest_visible_dataset_id(self) -> str | None:
+        for dataset in self._managed_datasets.values():
+            if dataset.is_visible and self.get_dataset_volume_node(dataset.dataset_id) is not None:
+                return dataset.dataset_id
+        return None
+
     def _resolve_observatory_context(self, search: str) -> ObservatoryLoadContext | None:
         query = parse_qs((search or "").lstrip("?"), keep_blank_values=False)
         subject_id = self._sanitize_single_query_value(query.get("subjectId"), r"[A-Za-z0-9_-]+")
@@ -791,7 +810,7 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
         sequence_node = self.scene.AddNewNodeByClass(
             "vtkMRMLSequenceNode",
-            f"{Path(reconstruction_name).stem} series {series_label} sequence",
+            f"serie {series_label} {Path(reconstruction_name).stem}",
         )
         sequence_node.SetIndexName("frame")
         sequence_node.SetIndexUnit("")
@@ -802,7 +821,7 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         for frame_index in range(frame_count):
             frame_node = self.scene.AddNewNodeByClass(
                 "vtkMRMLScalarVolumeNode",
-                f"{Path(reconstruction_name).stem} series {series_label} frame {frame_index + 1}",
+                f"serie {series_label} frame {frame_index + 1} {Path(reconstruction_name).stem}",
             )
             slicer.util.updateVolumeFromArray(frame_node, self._to_slicer_spatial_array(volume[..., frame_index]))
             if spacing is not None:
@@ -842,7 +861,7 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
         node = self.scene.AddNewNodeByClass(
             "vtkMRMLScalarVolumeNode",
-            f"{Path(reconstruction_name).stem} series {series_label}",
+            f"serie {series_label} {Path(reconstruction_name).stem}",
         )
         header = self._series_header(series)
         matrix = self._create_ijk_to_ras_matrix(header)

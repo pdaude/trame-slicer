@@ -33,11 +33,11 @@ class AstroLITViewerLogic(BaseLogic[ViewerLayoutState]):
             on_slice_double_click=self._on_slice_double_click,
         )
 
+        self._load_files_logic = AstroLITLoadVolumeLogic(server, slicer_app)
         self._segment_editor_logic = SegmentEditorLogic(server, slicer_app)
-        self._volume_properties_logic = VolumePropertyLogic(server, slicer_app)
+        self._volume_properties_logic = VolumePropertyLogic(server, slicer_app, self._load_files_logic)
         self._layout_button_logic = LayoutButtonLogic(server, slicer_app)
         self._markups_logic = MarkupsButtonLogic(server, slicer_app)
-        self._load_files_logic = AstroLITLoadVolumeLogic(server, slicer_app)
         self._dataset_manager_logic = DatasetManagerLogic(server, slicer_app, self._load_files_logic)
         self._sequence_playback_logic = SequencePlaybackLogic(server, slicer_app)
         self._slab_logic = SlabLogic(server, slicer_app)
