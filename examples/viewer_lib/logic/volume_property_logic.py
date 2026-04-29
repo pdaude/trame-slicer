@@ -98,10 +98,19 @@ class VolumePropertyLogic(BaseLogic[VolumePropertyState]):
         if not self._has_valid_volume_node():
             return
 
-        min_value, max_value = VolumeWindowLevel.get_volume_scalar_range(self._volume_node)
-        self.data.window_level_slider.min_value = min_value
-        self.data.window_level_slider.max_value = max_value
-        self._auto_window_level()
+        scalar_min, scalar_max = VolumeWindowLevel.get_volume_scalar_range(self._volume_node)
+        display_node = self._volume_node.GetDisplayNode()
+
+        if display_node is None:
+            self.data.window_level_slider.min_value = scalar_min
+            self.data.window_level_slider.max_value = scalar_max
+            self._auto_window_level()
+            return
+
+        display_min, display_max = VolumeWindowLevel.get_volume_display_range(self._volume_node)
+        self.data.window_level_slider.min_value = min(scalar_min, display_min)
+        self.data.window_level_slider.max_value = max(scalar_max, display_max)
+        self.data.window_level_slider.value = [display_min, display_max]
 
     def _init_vr_shift_slider(self):
         if self._volume_rendering.get_vr_display_node(self._volume_node) is None:

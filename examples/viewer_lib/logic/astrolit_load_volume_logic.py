@@ -632,7 +632,7 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             foreground_node = visible_nodes[0]
             self._slicer_app.display_manager.show_volume_in_slice_foreground(foreground_node, view_group=None)
             for view in self._slicer_app.view_manager.get_slice_views():
-                view.set_foreground_opacity(0.45)
+                view.set_foreground_opacity(1)
 
         self.volume_loaded(background_node)
         if do_reset_views:
