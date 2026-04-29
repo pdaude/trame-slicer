@@ -106,6 +106,9 @@ class LoadVolumeUI(FlexContainer):
                         show_select=True,
                         return_object=False,
                         density="compact",
+                        items_per_page=-1,
+                        fixed_header=True,
+                        height="60vh",
                         hide_default_footer=True,
                     )
                 with VCardActions(classes="justify-end ga-2"):
