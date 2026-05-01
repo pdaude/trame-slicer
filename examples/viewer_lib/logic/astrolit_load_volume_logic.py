@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from glob import glob, has_magic
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -144,7 +145,18 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
     def _load_local_path(self, path_value: str) -> None:
         self._cleanup_pending_h5_selection()
-        resolved_path = Path((path_value or "").strip()).expanduser()
+        raw_path = (path_value or "").strip()
+        matches = self._resolve_local_h5_matches(raw_path)
+        if matches is not None:
+            print(f"[AstroLIT viewer] scanning local h5 glob: {raw_path}")
+            if not self._present_h5_selection_for_files(matches, display_name=raw_path, display_path=raw_path):
+                print(f"[AstroLIT viewer] no readable h5 files for glob: {raw_path}")
+                self._show_path_error_dialog(
+                    Path(raw_path).expanduser(),
+                    message='No .h5 files matched the requested pattern.',
+                )
+            return
+        resolved_path = Path(raw_path).expanduser()
         if not resolved_path.exists():
             print(f"[AstroLIT viewer] local path not found: {resolved_path}")
             self._show_path_error_dialog(resolved_path)
@@ -152,7 +164,7 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
         if resolved_path.is_dir():
             print(f"[AstroLIT viewer] scanning local h5 directory: {resolved_path}")
-            if not self._present_h5_directory_selection_dialog(resolved_path):
+            if not self._present_h5_selection_for_files(self._collect_h5_files_from_directory(resolved_path), display_name=resolved_path.name or resolved_path.as_posix(), display_path=resolved_path.as_posix()):
                 print(f"[AstroLIT viewer] no readable h5 files in directory: {resolved_path}")
                 self._show_path_error_dialog(
                     resolved_path,
@@ -382,19 +394,8 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         return loaded_any
 
     def _present_h5_directory_selection_dialog(self, directory_path: Path) -> bool:
-        h5_files = sorted(path for path in directory_path.iterdir() if path.is_file() and path.suffix.lower() == '.h5')
-        if not h5_files:
-            return False
-
-        series_rows: list[H5SeriesSummary] = []
-        for h5_path in h5_files:
-            series_rows.extend(self._scan_reconstruction_series(h5_path))
-
-        if not series_rows:
-            return False
-
-        return self._present_h5_selection_rows(
-            series_rows=series_rows,
+        return self._present_h5_selection_for_files(
+            self._collect_h5_files_from_directory(directory_path),
             display_name=directory_path.name or directory_path.as_posix(),
             display_path=directory_path.as_posix(),
         )
@@ -416,6 +417,52 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             display_name=display_name,
             display_path=h5_path.as_posix(),
             temp_dir=temp_dir,
+        )
+
+    def _present_h5_selection_for_files(
+        self,
+        h5_files: list[Path],
+        display_name: str,
+        display_path: str,
+        temp_dir: TemporaryDirectory[str] | None = None,
+    ) -> bool:
+        if not h5_files:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+            return False
+
+        series_rows: list[H5SeriesSummary] = []
+        for h5_path in h5_files:
+            series_rows.extend(self._scan_reconstruction_series(h5_path))
+
+        if not series_rows:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+            return False
+
+        return self._present_h5_selection_rows(
+            series_rows=series_rows,
+            display_name=display_name,
+            display_path=display_path,
+            temp_dir=temp_dir,
+        )
+
+    def _collect_h5_files_from_directory(self, directory_path: Path) -> list[Path]:
+        return sorted(
+            path for path in directory_path.iterdir()
+            if path.is_file() and path.suffix.lower() == ".h5"
+        )
+
+    def _resolve_local_h5_matches(self, raw_path: str) -> list[Path] | None:
+        if not raw_path:
+            return None
+        expanded = os.path.expanduser(raw_path)
+        if not has_magic(expanded):
+            return None
+        return sorted(
+            Path(match)
+            for match in glob(expanded)
+            if Path(match).is_file() and Path(match).suffix.lower() == ".h5"
         )
 
     def _present_h5_selection_rows(
