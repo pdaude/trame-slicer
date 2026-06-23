@@ -16,6 +16,7 @@ import slicer.util
 from slicer import vtkMRMLSequenceBrowserNode, vtkMRMLSequenceNode, vtkMRMLVolumeNode
 from trame_server import Server
 from undo_stack import Signal
+from vtkmodules.vtkCommonCore import vtkCollection
 from vtkmodules.vtkCommonMath import vtkMatrix4x4
 
 from trame_slicer.core import SlicerApp
@@ -244,8 +245,7 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         if dataset is None:
             return
 
-        if self._active_sequence_node and self._active_sequence_node.GetID() in dataset.removal_node_ids:
-            self._clear_active_sequence_context()
+        self._prepare_sequence_context_for_dataset_removal(dataset)
 
         for node_id in reversed(dataset.removal_node_ids):
             node = self.scene.GetNodeByID(node_id)
@@ -605,9 +605,9 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             series_label = str(series.get('series_label') or item_key)
             series_name = str(series.get('source_name') or reconstruction_name)
             print(f"[AstroLIT viewer] building MRML nodes for series {series_label} from {series_name}")
-            if self._series_frame_count(series) > 1 and not sequence_activated:
+            if self._series_frame_count(series) > 1:
                 if self._create_sequence_from_h5_series(series_name, series_label, series):
-                    print(f"[AstroLIT viewer] activated sequence browser for series {series_label}")
+                    print(f"[AstroLIT viewer] sequence browser ready for series {series_label}")
                     sequence_activated = True
                     continue
 
@@ -855,6 +855,14 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         if frame_count <= 1 or volume.ndim < 4:
             return False
 
+        browser_node = self._resolve_synchronized_browser(frame_count)
+        if browser_node is False:
+            print(
+                f"[AstroLIT viewer] sequence {series_label} has {frame_count} frames and cannot be synchronized "
+                f"with the active browser"
+            )
+            return False
+
         sequence_node = self.scene.AddNewNodeByClass(
             "vtkMRMLSequenceNode",
             f"serie {series_label} {Path(reconstruction_name).stem}",
@@ -878,7 +886,11 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
             frame_node.CreateDefaultDisplayNodes()
             sequence_node.SetDataNodeAtValue(frame_node, str(frame_index))
 
-        browser_node = self._ensure_sequence_browser(sequence_node)
+        if browser_node is None:
+            browser_node = self._ensure_sequence_browser(sequence_node)
+        else:
+            browser_node.AddSynchronizedSequenceNodeID(sequence_node.GetID())
+
         if browser_node is None:
             self.scene.RemoveNode(sequence_node)
             return False
@@ -890,6 +902,12 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         if not isinstance(proxy_volume, vtkMRMLVolumeNode):
             self.scene.RemoveNode(sequence_node)
             return False
+
+        if self._active_sequence_browser is browser_node:
+            self._slicer_app.sequences_logic.UpdateProxyNodesFromSequences(browser_node)
+            self._register_sequence_dataset(browser_node, sequence_node, proxy_volume, include_browser_node=False)
+            self._apply_dataset_stack(do_reset_views=False)
+            return True
 
         return self._activate_sequence_browser(browser_node, sequence_node, proxy_volume)
 
@@ -996,13 +1014,18 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         browser_node: vtkMRMLSequenceBrowserNode,
         sequence_node: vtkMRMLSequenceNode,
         proxy_volume: vtkMRMLVolumeNode,
+        include_browser_node: bool = True,
     ) -> None:
         if proxy_volume.GetID() is None or self._has_managed_node_id(proxy_volume.GetID()):
             return
 
         removal_node_ids = [
             node_id
-            for node_id in [browser_node.GetID(), sequence_node.GetID(), proxy_volume.GetID()]
+            for node_id in [
+                browser_node.GetID() if include_browser_node else None,
+                sequence_node.GetID(),
+                proxy_volume.GetID(),
+            ]
             if node_id is not None
         ]
         for index in range(sequence_node.GetNumberOfDataNodes()):
@@ -1018,6 +1041,17 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
         )
         self._managed_datasets[dataset.dataset_id] = dataset
         self._emit_datasets_changed()
+
+    def _resolve_synchronized_browser(self, frame_count: int) -> vtkMRMLSequenceBrowserNode | None | bool:
+        browser_node = self._active_sequence_browser
+        if browser_node is None:
+            return None
+
+        active_frame_count = int(browser_node.GetNumberOfItems())
+        if active_frame_count != frame_count:
+            return False
+
+        return browser_node
 
     def _create_dataset(
         self,
@@ -1039,6 +1073,42 @@ class AstroLITLoadVolumeLogic(LoadVolumeLogic):
 
     def _has_managed_node_id(self, node_id: str) -> bool:
         return any(node_id in dataset.removal_node_ids for dataset in self._managed_datasets.values())
+
+    def _prepare_sequence_context_for_dataset_removal(self, dataset: ManagedDataset) -> None:
+        active_sequence_node = self._active_sequence_node
+        browser_node = self._active_sequence_browser
+        if active_sequence_node is None or browser_node is None:
+            return
+
+        if active_sequence_node.GetID() not in dataset.removal_node_ids:
+            return
+
+        master_sequence = browser_node.GetMasterSequenceNode()
+        if master_sequence is not None and master_sequence.GetID() == active_sequence_node.GetID():
+            replacement_sequence = self._find_replacement_sequence_node(browser_node, excluding_id=active_sequence_node.GetID())
+            if replacement_sequence is not None:
+                browser_node.SetAndObserveMasterSequenceNodeID(replacement_sequence.GetID())
+                replacement_proxy = browser_node.GetProxyNode(replacement_sequence)
+                if isinstance(replacement_proxy, vtkMRMLVolumeNode):
+                    self._active_sequence_node = replacement_sequence
+                    self._active_proxy_volume = replacement_proxy
+                    self.sequence_loaded(browser_node, replacement_sequence, replacement_proxy)
+                    return
+
+        self._clear_active_sequence_context()
+
+    def _find_replacement_sequence_node(
+        self,
+        browser_node: vtkMRMLSequenceBrowserNode,
+        excluding_id: str,
+    ) -> vtkMRMLSequenceNode | None:
+        synchronized_nodes = vtkCollection()
+        browser_node.GetSynchronizedSequenceNodes(synchronized_nodes, False)
+        for index in range(synchronized_nodes.GetNumberOfItems()):
+            node = synchronized_nodes.GetItemAsObject(index)
+            if isinstance(node, vtkMRMLSequenceNode) and node.GetID() != excluding_id:
+                return node
+        return None
 
     def _reset_managed_datasets(self) -> None:
         self._managed_datasets = {}
