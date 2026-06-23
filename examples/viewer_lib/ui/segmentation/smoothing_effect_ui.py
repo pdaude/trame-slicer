@@ -55,7 +55,6 @@ class SmoothingEffectUI(FlexContainer):
             VSelect(
                 v_model=self._typed_state.name.mode,
                 items=(
-                    "options",
                     self._typed_state.encode(
                         [{"text": st.name.title(), "value": self._typed_state.encode(st)} for st in SmoothingEffectMode]
                     ),

@@ -57,7 +57,6 @@ class SlabButton(VMenu):
                         VSelect(
                             v_model=(typed_state.name.current_slab_type,),
                             items=(
-                                "options",
                                 typed_state.encode(
                                     [{"text": st.name.title(), "value": typed_state.encode(st)} for st in SlabType]
                                 ),
